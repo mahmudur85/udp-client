@@ -1,5 +1,7 @@
 #include <iostream>
 #include <string>
+#include <thread>
+#include <csignal>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,12 +12,17 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <fcntl.h>
+#include <time.h>
+#include <sys/time.h>
 
 using namespace std;
 
 #define SERVER_ADDR "192.168.30.80"
 #define PORT     5876
 #define BUFSIZE 1400
+
+static bool running = true;
+static int sockfd;
 
 static int make_socket_non_blocking (int sfd) {
     int flags, s;
@@ -38,33 +45,99 @@ static int make_socket_non_blocking (int sfd) {
     return 0;
 }
 
+/**
+ * We will register SIGINT, since we cannot register SIGKILL and SIGSTOP
+ */
+void sig_handler(int signo) {
+    if (signo == SIGINT)
+        cout << "received SIGINT" << endl;
+    if (signo == SIGABRT)
+        cout << "received SIGABRT" << endl;
+    if (signo == SIGSEGV)
+        cout << "received SIGSEGV" << endl;
+
+    cout << "Shutdown Initiating" << endl;
+
+    cout << "Shutdown Complete" << endl;
+    exit(1);
+}
+
+void register_signals() {
+    std::cout << "Registering  Signals" << std::endl;
+    if (signal(SIGINT, sig_handler) == SIG_ERR)
+        cout << "Not able to register SIGNALS (SIGINT)" << endl;
+    if (signal(SIGABRT, sig_handler) == SIG_ERR)
+        cout << "Not able to register SIGNALS (SIGABRT)" << endl;
+    if (signal(SIGSEGV, sig_handler) == SIG_ERR)
+        cout << "Not able to register SIGNALS (SIGSEGV)" << endl;
+
+    running = false;
+
+    close(sockfd);
+}
+
 static socklen_t get_address_len(const sockaddr* address) {
     if(address->sa_family == AF_INET) return sizeof(struct sockaddr_in);
     else if(address->sa_family == AF_INET6) return sizeof(struct sockaddr_in6);
     return 0;
 }
 
-// Driver code
-int main() {
-    int sockfd;
+void send_thread(int fd){
+    char buffer[256];
+    struct timeval tv;
+    unsigned long time_in_micros;
+    for(int i = 1; i <= 10; i++ ){
+        memset(buffer,0, sizeof(buffer));
+        gettimeofday(&tv,NULL);
+        time_in_micros = 1000000 * tv.tv_sec + tv.tv_usec;
+        sprintf(buffer, "%lld", (long long) time_in_micros);
+        send(fd, buffer, strlen(buffer), MSG_DONTWAIT);
+        cout << "\nsent >> " << buffer << endl;
+        usleep(1);
+    }
+}
+
+void recv_thread(int fd, struct sockaddr *server_addr, socklen_t *server_addr_len){
     char buffer[BUFSIZE];
-    string hello("Hello from client");
+    while(running) {
+        while (true) {
+            auto r = (int) recv(fd, buffer, BUFSIZE, MSG_DONTWAIT);
+            /*auto r = (int) recvfrom(fd, (char *) buffer, BUFSIZE,
+                                    0, server_addr,
+                                    server_addr_len);*/
+            if (r == -1) {
+                if ((errno == EAGAIN) ||
+                    (errno == EWOULDBLOCK)) {
+                    /* We have processed all incoming packets. */
+//                    cout << "processed all incoming packets." << endl;
+                } else {
+                    perror("recv() error!");
+                }
+                break;
+            }
+            if (r > 0) {
+                cout << "recv << " << buffer << endl;
+            }
+        }
+        usleep(1);
+    }
+}
+
+int main() {
     struct sockaddr_in     server_addr, local_addr;
-    int optval = 1, n;
+    int optval = 1;
     socklen_t server_addr_len, local_addrLen;
 
-    memset(&server_addr, 0, sizeof(server_addr));
+    register_signals();
+
+    running = true;
+
     memset(&server_addr, 0, sizeof(server_addr));
 
     // Creating socket file descriptor
     if ( (sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0 ) {
         perror("socket creation failed");
         exit(EXIT_FAILURE);
-    }
-
-    if(make_socket_non_blocking(sockfd) < 0){
-        perror( "Could make socket non blocking");
-        return EXIT_FAILURE;
     }
 
     if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (char *) &optval, sizeof(optval)) < 0) {
@@ -87,6 +160,11 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    if(make_socket_non_blocking(sockfd) < 0){
+        perror( "Could make socket non blocking");
+        return EXIT_FAILURE;
+    }
+
     // Filling server information
     bzero(&server_addr, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
@@ -101,18 +179,11 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    /*sendto(sockfd, hello.c_str(), hello.length(),
-           MSG_CONFIRM, (const struct sockaddr *) &server_addr,
-           sizeof(server_addr));*/
-    send(sockfd, hello.c_str(), hello.length(), MSG_DONTWAIT);
-    printf("Hello message sent.\n");
+    std::thread thread_recv(recv_thread, sockfd,  (struct sockaddr *) &server_addr, &server_addr_len);
+    std::thread thread_send(send_thread, sockfd);
 
-//    n = (int) recvfrom(sockfd, (char *)buffer, BUFSIZE,
-//                 MSG_WAITALL, (struct sockaddr *) &server_addr,
-//                 (socklen_t *)&server_addr_len);
-//    buffer[n] = '\0';
-//    printf("Server : %s\n", buffer);
+    thread_send.detach();
+    thread_recv.join();
 
-    close(sockfd);
     return 0;
 }
