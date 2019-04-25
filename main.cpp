@@ -86,14 +86,14 @@ void send_thread(int fd){
     char buffer[256];
     struct timeval tv;
     unsigned long time_in_micros;
-    for(int i = 1; i <= 10; i++ ){
+    for(int i = 1; i <= 10000; i++ ){
         memset(buffer,0, sizeof(buffer));
         gettimeofday(&tv,NULL);
         time_in_micros = 1000000 * tv.tv_sec + tv.tv_usec;
         sprintf(buffer, "%lld", (long long) time_in_micros);
         send(fd, buffer, strlen(buffer), MSG_DONTWAIT);
         cout << "\nsent >> " << buffer << endl;
-        usleep(1);
+        //usleep(1);
     }
 }
 
@@ -179,11 +179,15 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    std::thread thread_recv(recv_thread, sockfd,  (struct sockaddr *) &server_addr, &server_addr_len);
+    //std::thread thread_recv(recv_thread, sockfd,  (struct sockaddr *) &server_addr, &server_addr_len);
     std::thread thread_send(send_thread, sockfd);
+    std::thread thread_send2(send_thread, sockfd);
+    std::thread thread_send3(send_thread, sockfd);
 
-    thread_send.detach();
-    thread_recv.join();
+    thread_send.join();
+    thread_send2.join();
+    thread_send3.join();
+    //thread_recv.join();
 
     return 0;
 }
